@@ -1,3 +1,4 @@
+using System.Globalization;
 using RateLimiter.Application;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,9 +19,9 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// WHY: The team needs a clear signal that the service booted correctly for Day 1.
-// WHAT: Logs a startup message indicating scaffold completion.
-app.Logger.LogInformation("Rate Limiter API started - Day 1: Scaffold complete");
+// WHY: The team needs a clear signal that the service booted correctly for Day 2.
+// WHAT: Logs a startup message indicating token bucket enforcement is active.
+app.Logger.LogInformation("Rate Limiter API started - Day 2: Token bucket enabled");
 
 // WHY: This endpoint is the entry point for all rate limit checks.
 // Clients call this before making their actual API request.
@@ -41,9 +42,25 @@ public static class RateLimitEndpoints
     public static async Task<IResult> HandleCheckAsync(
         CheckRateLimitRequest request,
         IRateLimitService rateLimitService,
+        HttpContext httpContext,
         CancellationToken cancellationToken)
     {
         var response = await rateLimitService.CheckAsync(request, cancellationToken);
-        return Results.Ok(response);
+
+        if (response.Allowed)
+        {
+            return Results.Ok(response);
+        }
+
+        // WHY: Clients need to know how long to wait before retrying.
+        // WHAT: Computes seconds until full refill and sets Retry-After for 429 responses.
+        var retryAfterSeconds = Math.Max(
+            0,
+            (int)Math.Ceiling((response.ResetAt - DateTimeOffset.UtcNow).TotalSeconds));
+
+        httpContext.Response.Headers["Retry-After"] =
+            retryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+
+        return Results.Json(response, statusCode: StatusCodes.Status429TooManyRequests);
     }
 }
